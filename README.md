@@ -2,7 +2,7 @@
 
 **Skills from people next door.** Neighbours in one locality list what they're good at (tutoring, errands, home cooking, repairs…) and send each other requests. Phone numbers are never shared: a provider accepts a request, then both sides chat inside the app.
 
-This is **v1, the full MVP** for a pilot in **Kaloor, Kochi**. The earlier lean build is tagged [`lean-mvp`](../../tree/lean-mvp).
+This is **v1, the full MVP** for a pilot in **Kaloor, Kochi**. The earlier lean build is kept on the [`lean-mvp`](../../tree/lean-mvp) branch.
 
 - [1. What's in this build](#1-whats-in-this-build)
 - [2. The stack, and why](#2-the-stack-and-why)
