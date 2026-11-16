@@ -4,8 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import type { Message } from "@/lib/types";
+import { markRequestSeen, sendMessage } from "@/app/actions";
 
-/** Live chat for an accepted request. Row-level security decides who can read and write. */
+/** Live chat for an accepted request. Reading is protected by row-level security; sending goes through send_message(). */
 export function Chat({
   requestId,
   meId,
@@ -36,6 +37,8 @@ export function Chat({
         (payload) => {
           const m = payload.new as Message;
           setMessages((prev) => (prev.some((x) => x.id === m.id) ? prev : [...prev, m]));
+          // Seen it live: clear the unread alert so the next message can alert again.
+          if (m.sender_id !== meId) void markRequestSeen(requestId);
         },
       )
       .on(
@@ -47,7 +50,7 @@ export function Chat({
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [requestId, router]);
+  }, [requestId, router, meId]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -59,19 +62,15 @@ export function Chat({
     if (!text) return;
     setSending(true);
     setError(null);
-    const { data, error } = await createClient()
-      .from("messages")
-      .insert({ request_id: requestId, body: text })
-      .select()
-      .single();
+    const res = await sendMessage(requestId, text);
     setSending(false);
-    if (error) {
-      setError("Couldn't send. This chat may be closed.");
+    if (!res.ok) {
+      setError(res.error);
       router.refresh();
       return;
     }
     setBody("");
-    const m = data as Message;
+    const m = res.message;
     setMessages((prev) => (prev.some((x) => x.id === m.id) ? prev : [...prev, m]));
   }
 

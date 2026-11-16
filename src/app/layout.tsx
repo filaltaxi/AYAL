@@ -7,7 +7,8 @@ export const metadata: Metadata = {
   title: { default: "Ayal — skills from your neighbours", template: "%s · Ayal" },
   description: "Find and offer everyday skills within your own locality. Tutoring, errands, home cooking, repairs and more, from people who live next door.",
   manifest: "/manifest.webmanifest",
-  icons: { icon: "/icon.svg" },
+  icons: { icon: "/icon.svg", apple: "/apple-touch-icon.png" },
+  appleWebApp: { capable: true, title: "Ayal", statusBarStyle: "default" },
 };
 
 export const viewport: Viewport = {

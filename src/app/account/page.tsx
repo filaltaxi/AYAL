@@ -6,6 +6,7 @@ import { getLocalities } from "@/lib/queries";
 import { signOut, unblockUser } from "@/app/actions";
 import { Avatar, VerifiedBadge } from "@/components/Avatar";
 import { ProfileForm, LocalityForm, DeleteAccountForm } from "./AccountForms";
+import { PushToggle } from "@/components/PushToggle";
 
 export const metadata = { title: "Account" };
 
@@ -22,9 +23,14 @@ export default async function AccountPage() {
     getLocalities(),
   ]);
   const blockedIds = (blocks ?? []).map((b) => b.blocked_id as string);
-  const { data: blockedProfiles } = blockedIds.length
+  const { data: visibleBlocked } = blockedIds.length
     ? await supabase.from("profiles").select("id, display_name").in("id", blockedIds)
     : { data: [] as { id: string; display_name: string }[] };
+  // Someone you blocked may no longer be visible to you; still let you unblock them.
+  const blockedProfiles = blockedIds.map((bid) => ({
+    id: bid,
+    display_name: (visibleBlocked ?? []).find((p) => p.id === bid)?.display_name ?? "Hidden profile",
+  }));
 
   const home = localities.find((l) => l.id === profile.home_locality_id);
   const nextChange = new Date(new Date(profile.locality_changed_at).getTime() + 30 * 864e5);
@@ -37,6 +43,7 @@ export default async function AccountPage() {
         <div>
           <h1 className="page-title">{profile.display_name}</h1>
           <p className="text-sm text-muted">{viewer.email}</p>
+          <Link href={`/u/${viewer.userId}`} className="btn-link">See your public profile</Link>
         </div>
       </div>
 
@@ -60,6 +67,16 @@ export default async function AccountPage() {
       </section>
 
       <section className="card p-5">
+        <h2 className="text-lg font-bold">Phone notifications</h2>
+        <p className="mt-1 text-sm text-muted">
+          Get an alert on this device for new requests, replies and chat messages. Alerts never show names or message text.
+        </p>
+        <div className="mt-3">
+          <PushToggle />
+        </div>
+      </section>
+
+      <section className="card p-5">
         <h2 className="text-lg font-bold">Phone</h2>
         {viewer.phoneVerified ? (
           <p className="mt-1 text-sm text-muted">✓ Verified ending {viewer.phone?.slice(-4)}. Never shown to anyone.</p>
@@ -71,11 +88,11 @@ export default async function AccountPage() {
         )}
       </section>
 
-      {(blockedProfiles ?? []).length > 0 && (
+      {blockedProfiles.length > 0 && (
         <section className="card p-5">
           <h2 className="text-lg font-bold">Blocked</h2>
           <ul className="mt-2 divide-y divide-line">
-            {(blockedProfiles ?? []).map((b) => (
+            {blockedProfiles.map((b) => (
               <li key={b.id} className="flex items-center justify-between py-2">
                 <span>{b.display_name}</span>
                 <form action={unblockUser.bind(null, b.id)}>

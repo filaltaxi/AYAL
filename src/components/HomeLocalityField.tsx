@@ -9,14 +9,23 @@ import type { Locality } from "@/lib/types";
  * GPS pre-selects it; the person can override. Sends lat/lng only so the
  * server can decide the "location verified" badge — it never stores them.
  */
-export function HomeLocalityField({ localities, initialId }: { localities: Locality[]; initialId?: number }) {
+export function HomeLocalityField({
+  localities,
+  initialId,
+  autoLocate = true,
+}: {
+  localities: Locality[];
+  initialId?: number;
+  /** Ask for location on load (onboarding). On Account it waits for a tap instead. */
+  autoLocate?: boolean;
+}) {
   const open = localities.filter((l) => l.is_active);
   const { state, locate } = useGpsLocality();
   const [selected, setSelected] = useState<number | "">(initialId ?? "");
 
   useEffect(() => {
-    locate();
-  }, [locate]);
+    if (autoLocate) locate();
+  }, [autoLocate, locate]);
 
   useEffect(() => {
     if (state.kind === "found" && selected === "") {
@@ -53,6 +62,11 @@ export function HomeLocalityField({ localities, initialId }: { localities: Local
       )}
 
       <p className="hint">
+        {state.kind === "idle" && (
+          <button type="button" onClick={locate} className="btn-link text-xs">
+            📍 Check my location for the “Location verified” badge
+          </button>
+        )}
         {state.kind === "locating" && "Checking your location…"}
         {state.kind === "found" && matches && !coarse && "✓ Your location matches. You'll get a “Location verified” badge."}
         {state.kind === "found" && matches && coarse && "Your location looks approximate (laptop?). Verify later from your phone for the badge."}

@@ -10,6 +10,7 @@ export type Viewer = {
   googlePhoto: string | null;
   phone: string | null;
   phoneVerified: boolean;
+  isAdmin: boolean;
   profile: Profile | null;
 };
 
@@ -20,7 +21,10 @@ export const getViewer = cache(async (): Promise<Viewer | null> => {
   const user = auth.user;
   if (!user) return null;
 
-  const { data: profile } = await supabase.from("profiles").select("*").eq("id", user.id).maybeSingle();
+  const [{ data: profile }, { data: isAdmin }] = await Promise.all([
+    supabase.from("profiles").select("*").eq("id", user.id).maybeSingle(),
+    supabase.rpc("is_admin"),
+  ]);
   const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
 
   return {
@@ -30,16 +34,23 @@ export const getViewer = cache(async (): Promise<Viewer | null> => {
     googlePhoto: (meta.avatar_url as string) ?? (meta.picture as string) ?? null,
     phone: user.phone || null,
     phoneVerified: Boolean(user.phone_confirmed_at),
+    isAdmin: isAdmin === true,
     profile: (profile as Profile) ?? null,
   };
 });
 
-/** Turns a Postgres function error into a short sentence for the person. */
-export function friendlyError(error: { message?: string } | null | undefined): string {
-  const msg = error?.message ?? "";
-  if (!msg) return "Something went wrong. Please try again.";
-  if (msg.includes("permission denied") || msg.includes("row-level security")) {
-    return "You can't do that.";
-  }
-  return msg;
+type DbError = { message?: string; code?: string } | null | undefined;
+
+/**
+ * Turns a database error into a sentence for the person.
+ * Only messages Ayal raises on purpose (code P0001) are shown as-is; anything
+ * else is replaced, so internal details never reach the screen.
+ */
+export function friendlyError(error: DbError): string {
+  if (!error) return "Something went wrong. Please try again.";
+  if (error.code === "P0001" && error.message) return error.message;
+  const msg = error.message ?? "";
+  if (error.code === "42501" || /permission denied|row-level security/i.test(msg)) return "You can't do that.";
+  console.error("[db]", error);
+  return "Something went wrong. Please try again.";
 }

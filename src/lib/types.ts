@@ -33,18 +33,6 @@ export type Listing = {
 
 export type RequestStatus = "pending" | "accepted" | "declined" | "expired" | "cancelled" | "done";
 
-export type RequestRow = {
-  id: string;
-  listing_id: string;
-  seeker_id: string;
-  provider_id: string;
-  message: string;
-  status: RequestStatus;
-  created_at: string;
-  responded_at: string | null;
-  expires_at: string;
-};
-
 export type Message = {
   id: number;
   request_id: string;
@@ -57,8 +45,28 @@ export type LocalityCandidate = {
   id: number;
   slug: string;
   name: string;
-  distance_m: number;
+  distance_km?: number;
+  distance_m?: number;
   is_active: boolean;
+};
+
+/** One person's track record (from people_stats). */
+export type PersonStats = {
+  user_id: string;
+  rating_avg: number | null;
+  rating_count: number;
+  jobs_done: number;
+  asked_done: number;
+  vouch_count: number;
+};
+
+export type Review = {
+  id: number;
+  rating: number;
+  comment: string | null;
+  listing_title: string;
+  created_at: string;
+  reviewer_name: string;
 };
 
 export type ActionResult = { ok: true; message?: string } | { ok: false; error: string } | null;

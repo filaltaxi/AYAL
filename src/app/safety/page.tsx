@@ -12,6 +12,10 @@ export default function SafetyPage() {
         <li>Contact only opens after the provider accepts a request. Either side can call it off.</li>
         <li>“Location verified” means their phone&apos;s GPS matched the locality. “Self-selected” means it didn&apos;t, or they skipped the check.</li>
         <li>Providers see how long a person has been on Ayal and how many jobs they&apos;ve completed.</li>
+        <li>Reviews come only from neighbours whose job was actually marked done, once per job.</li>
+        <li>“Vouched by” counts neighbours in the same locality who know the person. Vouching needs a verified phone and a week on Ayal.</li>
+        <li>Providers who travel from a nearby locality are labelled “Lives in … · serves …”, so you know they&apos;re not next door.</li>
+        <li>The Ayal team can suspend anyone who breaks the rules. Their listings disappear and they can&apos;t message anyone.</li>
       </ul>
       <h2>Before meeting</h2>
       <ul>

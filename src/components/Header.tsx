@@ -25,6 +25,11 @@ export async function Header() {
         <nav className="flex items-center gap-1 text-sm font-semibold">
           {viewer ? (
             <>
+              {viewer.isAdmin && (
+                <Link href="/admin" className="rounded-lg px-2.5 py-1.5 text-accent hover:bg-accent-soft">
+                  Admin
+                </Link>
+              )}
               <Link href="/me/listings" className="rounded-lg px-2.5 py-1.5 hover:bg-brand-soft">
                 My skills
               </Link>

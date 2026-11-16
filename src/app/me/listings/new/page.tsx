@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getViewer } from "@/lib/viewer";
-import { getCategories } from "@/lib/queries";
+import { getCategories, getLocalities, getNearbyOpenLocalities } from "@/lib/queries";
 import { ListingForm } from "../ListingForm";
 
 export const metadata = { title: "Offer a skill" };
@@ -30,12 +30,19 @@ export default async function NewListingPage() {
     );
   }
 
+  const [categories, nearby, localities] = await Promise.all([
+    getCategories(),
+    getNearbyOpenLocalities(viewer.profile.home_locality_id),
+    getLocalities(),
+  ]);
+  const home = localities.find((l) => l.id === viewer.profile!.home_locality_id);
+
   return (
     <div>
       <Link href="/me/listings" className="btn-link">← My skills</Link>
       <h1 className="page-title mt-3">Offer a skill</h1>
       <p className="mt-1 text-muted">Your listing appears in your home locality. People send you a request; you decide who to help.</p>
-      <ListingForm categories={await getCategories()} />
+      <ListingForm categories={categories} nearby={nearby} homeName={home?.name ?? "your locality"} />
     </div>
   );
 }

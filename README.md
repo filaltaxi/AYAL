@@ -2,7 +2,7 @@
 
 **Skills from people next door.** Neighbours in one locality list what they're good at (tutoring, errands, home cooking, repairs…) and send each other requests. Phone numbers are never shared: a provider accepts a request, then both sides chat inside the app.
 
-This repo is the **lean MVP** for a single-locality pilot in **Kaloor, Kochi**.
+This is **v1, the full MVP** for a pilot in **Kaloor, Kochi**. The earlier lean build is tagged [`lean-mvp`](../../tree/lean-mvp).
 
 - [1. What's in this build](#1-whats-in-this-build)
 - [2. The stack, and why](#2-the-stack-and-why)
@@ -10,26 +10,39 @@ This repo is the **lean MVP** for a single-locality pilot in **Kaloor, Kochi**.
 - [4. Folder map](#4-folder-map)
 - [5. How each feature works](#5-how-each-feature-works)
 - [6. The database](#6-the-database)
-- [7. Security model](#7-security-model)
+- [7. Security and privacy model](#7-security-and-privacy-model)
 - [8. Set up](#8-set-up)
-- [9. Day-to-day operations](#9-day-to-day-operations)
-- [10. Testing the database rules](#10-testing-the-database-rules)
-- [11. Extending it](#11-extending-it)
+- [9. Running the pilot (admin)](#9-running-the-pilot-admin)
+- [10. Tests and CI](#10-tests-and-ci)
+- [11. What's still left](#11-whats-still-left)
 - [12. Troubleshooting](#12-troubleshooting)
 
 ---
 
 ## 1. What's in this build
 
-| In this build | Left for later |
+| Area | What people get |
 | --- | --- |
-| Google sign-in, then phone OTP before the first request or listing | Push and SMS alerts |
-| GPS-suggested locality with a "Location verified" badge | "Also serves" up to 2 nearby localities |
-| Browse any locality, filter by category, 20 per page | Reviews and ratings |
-| Up to 3 listings per person, edit, pause, delete | Admin screen (use the Supabase dashboard) |
-| Request → accept/decline → live chat → mark done / call off | Native Android/iOS apps |
-| 48-hour expiry, open-request limits, report and block | Malayalam / Tamil UI |
-| Email alerts (optional), account deletion, installable PWA | Payments |
+| Sign-in | Google sign-in, then phone OTP before the first request or listing. 18+ only |
+| Locality | GPS suggests the locality; "Location verified" badge when it matches; change once every 30 days |
+| Browse | Any locality, category chips, **text search**, 20 per page, local providers first |
+| Listings | Up to 3 per person; pause, edit, delete; **also serve up to 2 open localities within 5 km**; **weekly view counts** |
+| Requests | Request → accept/decline → live chat → mark done / call off; 48-hour expiry; open-request limits |
+| Trust | **Reviews and star ratings**, **neighbour vouches**, **provider profile pages**, seeker track record, report and block |
+| Alerts | **Phone push notifications** (incl. new chat messages) and email, sent after the page responds |
+| Admin | **Dashboard**: pilot stats, reports queue, hide listings, suspend people, open/close localities, waitlist counts |
+| Coming soon | Closed localities collect a **waitlist** ("23 neighbours are waiting for Vyttila") |
+| Account | Edit name, alerts, change locality, unblock, delete account (the other side keeps its history) |
+| Quality | ~100 database rule tests, GitHub Actions CI, error and loading screens, installable PWA with app icons |
+
+### What changed from the lean MVP (review fixes)
+1. **Stale requests can't lock people out.** Requests past 48 hours expire on their own the next time anyone involved acts, even if the scheduler isn't running.
+2. **Deleting keeps the other side's history.** Deleting a listing or an account cancels open requests and tells the other person; their requests and chat stay, showing "Former member".
+3. **Profiles aren't public by default.** A profile is visible only while the person has a live listing, or to people who share a request with them.
+4. **No raw database errors on screen.** Only messages Ayal raises on purpose are shown.
+5. **Alerts never slow an action.** Email and push go out after the response (`after()`).
+6. **Chat messages alert the other person** (one alert until they read it).
+7. Smaller: one batched query for track records, GPS check on Account only when tapped, error/loading screens.
 
 ---
 
@@ -37,55 +50,53 @@ This repo is the **lean MVP** for a single-locality pilot in **Kaloor, Kochi**.
 
 ```
  Phone browser ──► Next.js app on Vercel ──► Supabase
-                    (pages + server actions)   ├─ Auth      Google sign-in, phone OTP, sessions
-                          │                    ├─ Postgres  data + all rules (RLS + functions)
-                          │                    │   └─ PostGIS   "which locality is this point in?"
-                          │                    │   └─ pg_cron   expires stale requests
-                          └──► Resend (email)  └─ Realtime  live chat
+   (PWA + push)     pages, server actions      ├─ Auth      Google sign-in, phone OTP, sessions
+                    after(): push + email      ├─ Postgres  data + every rule (RLS + functions)
+                          │                    │   ├─ PostGIS  "which locality is this point in?", 5 km checks
+                          │                    │   └─ pg_cron  expires stale requests (optional now)
+                          │                    └─ Realtime  live chat
+                          ├──► Web push (browser push services, VAPID keys)
+                          └──► Resend (email)
 ```
 
 | Piece | What it does here | Why this choice |
 | --- | --- | --- |
-| **Next.js 15 (App Router)** | Renders every page on the server, runs *server actions* for form submissions, and ships small client components only where needed (GPS, OTP, chat). | One codebase for UI and server logic; no separate API to maintain. |
-| **TypeScript** | Types across pages, actions and database rows. | Catches mistakes before runtime. |
-| **Tailwind CSS 4** | Styling. Design tokens (colours, fonts) and small reusable classes (`btn-primary`, `card`, `input`, `chip`) live in `src/app/globals.css`. | Fast to change; no component library to fight. |
-| **Supabase Auth** | Google OAuth sign-in, then links a phone number to the same account with an OTP. Sessions live in cookies managed by `@supabase/ssr`. | Auth and database in one service, and the database can read who is calling (`auth.uid()`). |
-| **Postgres (Supabase)** | All data. All business rules, via row-level security (RLS) and `security definer` functions. | Rules can't be bypassed from the browser. Relational data (users ↔ listings ↔ requests ↔ messages) fits SQL. |
-| **PostGIS** | Geography types and distance/containment queries for localities. | Accurate "is this GPS point in Kaloor?" checks in one query. |
-| **pg_cron** | Runs `expire_requests()` every 15 minutes. | No external scheduler needed. |
-| **Supabase Realtime** | Streams new `messages` rows and `requests` status changes to the open chat page. Respects RLS. | Live chat without running a websocket server. |
-| **Resend** | Sends request alert emails. Optional. | Free tier is enough for a pilot; simple API. |
-| **Vercel** | Hosts the Next.js app. | Zero-config deploys from GitHub; built-in DDoS protection and CDN. |
+| **Next.js 15 (App Router)** | Server-renders pages, runs server actions for every change, client components only where needed (GPS, OTP, chat, push). | One codebase for UI and server logic. |
+| **TypeScript + Tailwind 4** | Types everywhere; design tokens and small utility classes in `globals.css`. | Fast to change, no component library. |
+| **Supabase Auth** | Google OAuth, then links a phone via OTP. Sessions in cookies (`@supabase/ssr`). | Auth and DB in one place; the DB knows who is calling (`auth.uid()`). |
+| **Postgres + RLS** | All data, all rules. Row-level security for reads; `security definer` functions for every state change. | Rules can't be bypassed from the browser. |
+| **PostGIS** | Locality matching from GPS, distances between localities. | Correct geography in one query. |
+| **Supabase Realtime** | Streams new messages and request status to an open chat. Respects RLS. | Live chat without a socket server. |
+| **web-push (VAPID)** | Sends phone notifications to subscribed browsers; `public/sw.js` shows them. | Free, no app store, works on Android and on iPhone once added to the Home Screen. |
+| **Resend** | Request emails. Optional. | Free tier fits a pilot. |
+| **Vercel** | Hosts the app. | Zero-config deploys; built-in DDoS protection and CDN. |
 
 **Who talks to whom**
-
-- The **browser** talks to Supabase directly only for: Google sign-in redirect, phone OTP, the GPS lookup (`locality_for_point`), and chat (read, send, live updates). All of these are protected by RLS.
-- Everything else goes **browser → Next.js server action → Supabase**, using the signed-in user's session (so RLS still applies).
-- The **secret key** (`SUPABASE_SECRET_KEY`) is used in exactly one place: `src/lib/email.ts`, to look up the recipient's email address for an alert. It never reaches the browser.
+- The **browser** talks to Supabase directly only for: Google sign-in, phone OTP, the GPS lookup, reading chat + live updates, and saving/removing its push subscription. All protected by RLS.
+- Everything else is **browser → server action → Supabase**, using the signed-in user's session, so RLS still applies.
+- The **secret key** is used only in `src/lib/notify.ts`, after the response, to find who to alert (email address, push devices). It never reaches the browser.
 
 ---
 
 ## 3. How a request travels through the system
 
-Example: Anu (Kaloor) asks Arjun (Kaloor) for maths tuition.
+Example: Vinu (Vyttila) asks Ravi (Kaloor, also serves Vyttila) for maths tuition.
 
-1. **Anu taps "Send request"** on `/listing/[id]`. The form posts to the `createRequest` server action (`src/app/actions.ts`).
-2. **The action calls `create_request(listing_id, message)`** in Postgres as Anu. The function checks, in order: signed in · has a profile · phone verified · listing exists, isn't paused or hidden · not her own listing · listing's locality = her home locality · neither has blocked the other · under her open-request limit (2 in week one, then 5) · no open request already on this listing. Any failure raises a plain-English error that the form shows.
-3. **The row is inserted** with `status = 'pending'` and `expires_at = now() + 48h`, and a `request_new` row goes into `notifications` for Arjun.
-4. **The action emails Arjun** (if email is configured and he hasn't turned alerts off), then redirects Anu to `/requests/[id]`.
-5. **Arjun sees a badge** on "Requests" (unread notifications count in the header). On `/requests` he sees Anu's member-since date, completed-jobs count and location badge.
-6. **Arjun taps Accept** → `respondRequest` → `respond_request(id, true)`. The function confirms he's the provider, it's still pending and not expired, sets `accepted`, notifies Anu; the action emails her.
-7. **Chat opens** on `/requests/[id]` for both. Messages are inserted straight from the browser into `messages`; RLS only allows it while the request is `accepted` and nobody is blocked. Realtime pushes each new row to the other person.
-8. **Either taps "Mark as done"** → `mark_request_done`. Status becomes `done`, the chat becomes read-only, and Anu's completed count goes up.
-
-Other endings: Arjun declines (`declined`), Anu withdraws (`cancelled`), either calls off an accepted job (`cancelled`), or nobody answers for 48 hours and pg_cron marks it `expired`.
+1. **Vinu taps "Send request"** → `createRequest` server action → `create_request()` in Postgres.
+2. **The function checks, in order:** signed in · profile · verified phone · not suspended · message 5–500 chars · *expires Vinu's own stale requests* · listing exists, live, owner not suspended · not his own · **listing's locality is Vinu's home, or one of its service areas** · nobody blocked anybody · under the open-request cap (2 in week one, then 5) · no open request already on this listing.
+3. **The request is stored** with a snapshot of the listing title and `expires_at = now() + 48h`; a `request_new` notification is written for Ravi.
+4. **After the response,** `alertUser()` sends Ravi a push and an email.
+5. **Ravi opens Requests:** stale requests are expired, he sees Vinu's member-since date, jobs done and location badge.
+6. **Ravi accepts** → `respond_request()` → Vinu is alerted. Chat opens.
+7. **Messages** go through `send_message()`: it checks the request is accepted and nobody is blocked, stores the message, and raises **one** `message_new` alert until the other person reads it. Realtime shows it live; seeing it live clears the alert.
+8. **Either marks it done** → `mark_request_done()`. Vinu can now **review** Ravi (once, within 30 days).
 
 ```
-pending ──accept──► accepted ──done──► done
+pending ──accept──► accepted ──done──► done ──► review (seeker, once)
    │                   │
    ├─decline─► declined └─call off─► cancelled
    ├─withdraw► cancelled
-   └─48h────► expired
+   └─48h────► expired          (also: listing deleted / account deleted / suspended → closed, other side told)
 ```
 
 ---
@@ -93,229 +104,208 @@ pending ──accept──► accepted ──done──► done
 ## 4. Folder map
 
 ```
-supabase/migrations/
-  20261116000001_schema.sql   tables, indexes, RLS policies, functions, grants, cron, realtime
-  20261116000002_seed.sql     10 Kochi localities (Kaloor open) + 12 categories
+supabase/
+  migrations/
+    20261116000001_schema.sql   lean-MVP tables, RLS, request functions
+    20261116000002_seed.sql     10 Kochi localities (Kaloor open) + 12 categories
+    20261116000003_v1.sql       review fixes + v1 features + the complete grant list
+  tests/
+    00_supabase_shim.sql        enough of Supabase to run on plain Postgres (roles, auth.uid())
+    01_helpers.sql              assertion helpers
+    10_rules_test.sql           ~100 checks that try to break the rules
+scripts/test-db.sh              runs migrations + tests on a throwaway database
+.github/workflows/ci.yml        type-check, lint, build, database tests
 
+public/sw.js                    service worker: shows push notifications, opens the right page
 src/
-  middleware.ts               refreshes the session cookie on every request; guards signed-in pages
+  middleware.ts                 refreshes the session; guards signed-in pages
   app/
-    layout.tsx                header, footer, metadata
-    page.tsx                  home: GPS suggests a locality to browse
-    l/[slug]/page.tsx         browse a locality: category chips, 20 per page
-    listing/[id]/             listing detail + RequestForm (shows why you can't request, if you can't)
-    login/                    Google button
-    auth/callback/route.ts    swaps Google's code for a session; sends new users to onboarding
-    onboarding/               name, date of birth, home locality (GPS)
-    verify-phone/             phone OTP form
-    me/listings/              list, new, [id]/edit, pause/resume/delete
-    requests/                 inbox (received / sent) + [id] page with Chat
-    account/                  name, email alerts, change locality, phone status, blocks, sign out, delete
-    safety/ terms/ privacy/   static pages (terms and privacy are drafts)
-    actions.ts                ALL server actions
-    manifest.ts               PWA manifest
-    globals.css               design tokens + utility classes
-  components/                 Header, Avatar, ListingCard, BrowsePicker, HomeLocalityField,
-                              useGpsLocality, RequestActions, ReportForm, SubmitButton, …
+    page.tsx                    home: GPS suggests a locality
+    l/[slug]/                   browse + search a locality; waitlist if closed
+    listing/[id]/               listing detail + send request (counts a view)
+    u/[id]/                     provider profile: stats, listings, reviews, vouch
+    me/listings/                my skills: create, edit, service areas, pause, delete, views
+    requests/                   inbox (received / sent) + [id]: chat, review, report, block
+    account/                    profile, push toggle, email alerts, locality, phone, blocks, delete
+    admin/                      pilot dashboard (admins only)
+    login/ auth/callback/ onboarding/ verify-phone/
+    safety/ terms/ privacy/     static pages (terms and privacy are drafts)
+    actions.ts                  ALL server actions
+    error.tsx loading.tsx       error and loading screens
+  components/                   Header, ListingCard, Trust (stars, vouches), PushToggle, WaitlistButton,
+                                BrowsePicker, HomeLocalityField, useGpsLocality, RequestActions, ReportForm…
   lib/
-    supabase/server.ts        Supabase client acting as the signed-in user (server)
-    supabase/client.ts        same, in the browser
-    supabase/middleware.ts    session refresh + route guard
-    supabase/admin.ts         secret-key client, used only for alert emails
-    viewer.ts                 getViewer(): who's signed in, their profile, phone status
-    queries.ts                shared selects (listing cards, localities, categories)
-    requests.ts               shared request select + type
-    email.ts                  sendRequestAlert()
-    format.ts                 dates, initials, status labels
-    env.ts                    env vars and constants
-    types.ts                  row types
+    notify.ts                   alertUser(): push + email after the response
+    queries.ts                  browse, track records, reviews, nearby localities
+    requests.ts                 request select + types
+    viewer.ts                   who's signed in (+ isAdmin); friendlyError()
+    supabase/                   server, browser, middleware and secret-key clients
 ```
 
 ---
 
 ## 5. How each feature works
 
-### Sign-in (Google)
-`/login` → `GoogleButton` calls `supabase.auth.signInWithOAuth({ provider: 'google' })` → Google → Supabase → `/auth/callback?code=…`. The callback exchanges the code for a session cookie. If the user has no row in `profiles`, they go to `/onboarding`; otherwise back to where they came from (`next`, validated so it can't redirect off-site).
+**Sign-in and onboarding.** Google → `/auth/callback` exchanges the code for a session → new people go to `/onboarding` (name, date of birth, home locality with GPS) → `/verify-phone` links a phone with an OTP (`updateUser({ phone })` + `verifyOtp({ type: 'phone_change' })`). The phone is asked only before the first listing or request.
 
-`src/middleware.ts` runs on every request: it refreshes the session cookie and redirects signed-out visitors away from `/me`, `/requests`, `/account`, `/onboarding` and `/verify-phone`.
+**Locality and GPS.** `locality_for_point()` returns up to two candidates (two = near a border, so both are offered). Matching uses a drawn `boundary` if present, else the nearest centre within `radius_m` + 300 m. Coordinates are sent only if they match the choice and the fix is precise (≤ 1 km), and they're discarded after the check.
 
-### Onboarding (18+, home locality)
-`OnboardingForm` posts name, date of birth, home locality and (if GPS matched) lat/lng to `completeOnboarding` → `complete_onboarding()` in Postgres. The function refuses under-18s and closed localities, creates `profiles` (public) and `profiles_private` (date of birth, alert setting), and sets `location_verified` by checking the point against the locality. Coordinates are discarded. The Google photo URL is saved as the profile photo.
+**Browse and search.** `browse_listings(locality, category, query, limit, offset)` runs *as the caller*, so blocks, suspension and paused listings are filtered by RLS. It returns the locality's own listings first, then nearby providers who serve it, each with owner, category and track record. Search is a case-insensitive match on title and description, with `%` and `_` escaped.
 
-### Phone verification (OTP)
-Asked only before the first listing or request. `PhoneOtpForm` calls `supabase.auth.updateUser({ phone: '+91…' })`, which texts a code, then `verifyOtp({ type: 'phone_change' })`. Supabase sets `phone_confirmed_at`; the database function `has_verified_phone()` reads it. While DLT registration is pending, use Supabase **test phone numbers** with fixed codes (see setup).
+**Service areas.** On the listing form a provider can tick up to 2 *open* localities within 5 km of home (`nearby_localities()`, PostGIS distance between centres). `set_listing_service_areas()` enforces the rules. Requests from those localities are allowed; cards there say "Lives in Kaloor · serves Vyttila". Changing home locality clears them.
 
-### Locality and GPS
-`useGpsLocality` asks the browser for a high-accuracy fix and calls `locality_for_point(lat, lng)`, which returns up to two candidates, nearest first. Two results means you're near a border, so both are offered.
+**Reviews.** After a job is marked done, the seeker can rate 1–5 stars with an optional comment, once, within 30 days (`leave_review()`). Reviews show on the provider's profile with the reviewer's name (`provider_reviews()`); averages come from `people_stats()`.
 
-- **Home page** (`BrowsePicker`): picks the locality to *browse*, saved in a cookie. No account needed.
-- **Onboarding/Account** (`HomeLocalityField`): picks the *home* locality. Lat/lng are sent only if they match the choice and the fix is precise (accuracy ≤ 1 km; laptops usually aren't), so the server can set the badge.
-- Matching uses the locality's drawn `boundary` if present, otherwise the nearest `center` within `radius_m`, plus 300 m of slack.
-- `change_home_locality()` allows one change per 30 days, pauses the user's listings and closes their open requests.
+**Vouches.** On a provider's profile, a neighbour in the **same** locality with a verified phone and at least a week on Ayal can vouch (or take it back) via `toggle_vouch()`. Only the count is public.
 
-### Browsing
-`/l/[slug]` queries `listings` for that locality (not paused, not hidden), newest first, 20 per page, optionally filtered by category. Anyone can browse; RLS hides listings between people who have blocked each other. Closed localities show "coming soon".
+**Profiles.** `/u/[id]` shows name, badge, home locality, rating, jobs done, vouches, live listings and reviews. Visible only if the person has a live listing or you share a request with them.
 
-### Listings
-`/me/listings/new` requires a verified phone. `saveListing` inserts or updates; a database trigger forces `locality_id` to the owner's home locality, enforces the 3-listing cap and the phone check. Owners can change only title, description, price, availability, category and paused flag; `is_hidden` is admin-only.
+**Listing views.** The listing page calls `record_listing_view()` (owner's own views don't count). "My skills" shows views in the last 7 days. No viewer identity is stored.
 
-### Requests
-Covered step by step in [section 3](#3-how-a-request-travels-through-the-system). Buttons live in `RequestActions`; each calls a server action, which calls one Postgres function. `/requests` marks notifications read when opened.
+**Waitlist.** A closed locality's page shows how many neighbours are waiting and lets signed-in people join (`locality_interest`). Admins see counts per locality.
 
-### Chat
-`Chat.tsx` loads existing messages server-side, then subscribes to Realtime for new `messages` rows and `requests` updates on that request. Sending inserts directly into `messages`; RLS checks the request is accepted, you're one of the two people, and nobody has blocked the other. `sender_id` defaults to the caller and can't be set by the client.
+**Alerts.** Every action that should notify someone calls `alertUser(userId, kind)`. It runs after the response: push to every device the person turned on (expired devices are removed automatically), plus email for request events if configured and not switched off. Push text never contains names or message text, since it shows on lock screens. The in-app badge comes from the `notifications` table.
 
-### Report and block
-`ReportForm` inserts into `reports` (reporter is always the caller). Block inserts into `blocks`; afterwards neither person sees the other's listings and no messages can be sent between them. Unblock from `/account`.
+**Push setup on a device.** Account → "Turn on notifications": registers `/sw.js`, asks permission, subscribes with the VAPID public key and saves it via `save_push_subscription()`. On iPhone this only works after "Add to Home Screen".
 
-### Email alerts
-`sendRequestAlert()` runs inside server actions after: new request, accepted, declined, cancelled. It skips silently if `RESEND_API_KEY`/`EMAIL_FROM` aren't set or the user turned alerts off, and never throws, so a failed email never breaks the action.
+**Report, block, suspend.** Reports go to the admin queue with context. Blocking hides both people from each other and closes chat. Suspension (admin) hides the person's listings and profile, closes their open requests and stops them messaging, listing, requesting, reviewing or vouching.
 
-### Account deletion
-`delete_my_account()` deletes the `auth.users` row; foreign keys cascade to profiles, listings, requests, messages, notifications, reports and blocks.
+**Account deletion.** `delete_my_account()` deletes the auth user. A trigger first closes their open requests and tells the other side; their profile, listings, messages, devices and reviews they received go; requests stay with the other person (as "Former member"), and reviews they wrote stay without their name.
 
 ---
 
 ## 6. The database
 
-| Table | Holds | Who can read | Who can write |
+| Table | Holds | Read by | Written by |
 | --- | --- | --- | --- |
-| `localities` | The 10 named localities: centre, radius, optional boundary, open/closed | Everyone | Admin (SQL) |
-| `categories` | The 12 categories | Everyone | Admin (SQL) |
-| `profiles` | Public profile: name, photo, home locality, verified badge, joined date | Everyone | Owner (name, photo only); functions |
-| `profiles_private` | Date of birth, email-alert setting | Owner, admins | Owner (alert setting only); functions |
+| `localities` | Named localities: centre, radius, optional boundary, open/closed | Everyone | Admin functions |
+| `categories` | 12 categories | Everyone | You (SQL) |
+| `profiles` | Name, photo, home locality, badge, joined date | Self; anyone if they have a live listing; people sharing a request; admins | Owner (name, photo); functions |
+| `profiles_private` | Date of birth, email-alert setting, suspension | Owner, admins | Owner (alert setting); functions |
 | `user_roles` | Admin flag | Nobody via the API | You, in the dashboard |
-| `listings` | Skills on offer | Everyone (active ones); owner (all of theirs) | Owner (limited columns); trigger sets locality |
-| `requests` | Who asked whom, message, status, timestamps | The two people, admins | Functions only |
-| `messages` | Chat lines | The two people, admins | The two people, only while accepted |
-| `notifications` | In-app alerts (unread badge) | Owner | Functions; owner marks read |
-| `reports` | Safety reports | Reporter, admins | Any signed-in user |
+| `listings` | Skills on offer | Everyone (live, owner not suspended, not blocked); owner; admins | Owner (limited columns); trigger sets locality |
+| `listing_service_areas` | Extra localities a listing serves | Whoever can see the listing | `set_listing_service_areas()` |
+| `requests` | Parties, message, status, listing title snapshot, timestamps | The two people, admins | Functions only |
+| `messages` | Chat | The two people, admins | `send_message()` only |
+| `notifications` | In-app alerts (badge, unread dots) | Owner | Functions; owner marks read |
+| `reviews` | Ratings and comments | Reviewer, provider, admins (public via `provider_reviews()`) | `leave_review()` |
+| `vouches` | Who vouched for whom | Voucher, provider, admins (public as a count) | `toggle_vouch()` |
+| `listing_daily_views` | Views per listing per day | The listing's owner, admins | `record_listing_view()` |
+| `locality_interest` | Waitlist for closed localities | Self, admins (public as a count) | Self |
+| `push_subscriptions` | Push devices | Owner | `save_/delete_push_subscription()` |
+| `reports` | Safety reports | Reporter, admins | Any signed-in person; admins resolve |
 | `blocks` | Who blocked whom | The blocker | The blocker |
 
-**Functions (the only way to change requests and localities):** `complete_onboarding`, `reverify_location`, `change_home_locality`, `create_request`, `respond_request`, `cancel_request`, `mark_request_done`, `expire_requests` (cron only), `delete_my_account`. Helpers: `locality_for_point`, `point_in_locality`, `has_verified_phone`, `is_admin`, `is_blocked_between`, `seeker_completed_count`, `notify` (internal).
-
-**Indexes:** browse (`locality_id, category_id, created_at` for active listings), owner listings, requests by seeker and by provider, messages by request, notifications by user, spatial indexes on locality centre and boundary. A partial unique index allows only one open request per seeker per listing.
+**Functions people can call:** `complete_onboarding`, `reverify_location`, `change_home_locality`, `create_request`, `respond_request`, `cancel_request`, `mark_request_done`, `expire_my_stale_requests`, `send_message`, `leave_review`, `toggle_vouch`, `set_listing_service_areas`, `save_push_subscription`, `delete_push_subscription`, `delete_my_account`, plus read helpers (`browse_listings`, `people_stats`, `provider_reviews`, `nearby_localities`, `locality_for_point`, `locality_waitlist`, `record_listing_view`) and `admin_*` (which check `is_admin()` themselves).
+**Internal only:** `notify`, `close_open_requests_for`, `expire_requests` (scheduler), `point_in_locality`, `assert_*`, trigger functions.
 
 ---
 
-## 7. Security model
+## 7. Security and privacy model
 
-- **Default deny.** The migration revokes all table and function access from `anon` and `authenticated`, then grants back exactly what's needed, including column-level grants (e.g. owners may update a listing's title but not `is_hidden` or `locality_id`). It re-revokes functions after creating them, because Supabase grants new functions to everyone by default.
-- **No direct state changes.** Request status can only change through functions that check who's calling.
-- **Privacy by design.** Phone numbers stay in Supabase Auth and appear in no table. GPS coordinates are never stored. Date of birth sits in `profiles_private`, readable only by its owner.
-- **Abuse limits.** One phone per account, open-request caps, 30-day locality cooldown, 3-listing cap, length limits on every text field.
-- **Safe redirects.** Every `next=` parameter is checked to be an internal path.
-- **Secrets.** Only `NEXT_PUBLIC_*` variables reach the browser. The secret key is server-only (`import "server-only"`).
+- **Default deny.** Migration 3 revokes every table, sequence and function grant from `anon`/`authenticated` and re-grants an explicit, complete list (column-level where needed). Supabase grants new objects to everyone by default; this undoes that.
+- **No direct state changes.** Request status, messages, reviews, vouches, service areas and suspensions change only through functions that check who's calling.
+- **Privacy by design.** Phone numbers stay in Supabase Auth. GPS coordinates are never stored. Date of birth is owner-only. Profiles are visible only with a live listing or a shared request. Push text never includes names or messages. View counts don't record viewers.
+- **Abuse limits.** One phone per account, open-request caps, 30-day locality cooldown, 3 listings, 2 service areas within 5 km, vouching needs a week and a verified phone, length limits on every text.
+- **Safe errors and redirects.** Only intentional (`P0001`) database messages reach the screen; every `next=` is checked to be internal.
+- **Secrets.** Only `NEXT_PUBLIC_*` reach the browser. The secret key and VAPID private key are server-only.
 
-What's **not** covered yet: captcha on sign-in (Google OAuth makes bot sign-ups costly, and phone OTP needs a signed-in user; turn on Supabase's auth rate limits), and image uploads (photos come from Google, so there's no EXIF/location risk yet).
+Still to add: captcha on sign-in (turn on Supabase's auth rate limits meanwhile), and a lawyer's review of `/terms` and `/privacy`.
 
 ---
 
 ## 8. Set up
 
-About an hour, once.
+About an hour, once. New setup and upgrading from `lean-mvp` are the same: run any migrations you haven't run, in order.
 
-### 8.1 Supabase project
+### 8.1 Supabase
 1. Create a project at [supabase.com](https://supabase.com), region Mumbai.
 2. **Database → Extensions:** enable `postgis` and `pg_cron`.
-3. **SQL editor:** run `supabase/migrations/20261116000001_schema.sql`, then `20261116000002_seed.sql`. (Or with the CLI: `supabase link` then `supabase db push`.)
+3. **SQL editor:** run `supabase/migrations/…001_schema.sql`, `…002_seed.sql`, then `…003_v1.sql`. (Or `supabase link` then `supabase db push`.)
 
 ### 8.2 Google sign-in
-1. [Google Cloud Console](https://console.cloud.google.com/) → create an OAuth client, type *Web application*.
-2. Authorised redirect URI: `https://YOUR-PROJECT.supabase.co/auth/v1/callback`.
-3. Supabase **Authentication → Sign In / Providers → Google:** paste the client ID and secret, enable.
-4. **Authentication → URL Configuration:** Site URL = your app URL; Redirect URLs: `http://localhost:3000/**` and your production URL `/**`.
+1. [Google Cloud Console](https://console.cloud.google.com/) → OAuth client, type *Web application*, redirect URI `https://YOUR-PROJECT.supabase.co/auth/v1/callback`.
+2. Supabase **Authentication → Sign In / Providers → Google:** paste client ID and secret.
+3. **Authentication → URL Configuration:** Site URL = your app; Redirect URLs `http://localhost:3000/**` and your production URL `/**`.
 
 ### 8.3 Phone OTP (test numbers first)
-1. **Authentication → Sign In / Providers → Phone:** enable. Supabase asks for an SMS provider; until DLT is done, you can select Twilio with placeholder values.
-2. Same panel: add **test phone numbers with fixed OTPs**, e.g. `919876543210=123456`. No SMS is sent for these.
-3. **Authentication → Rate Limits:** keep SMS low (e.g. 30/hour) so nobody can run up a bill.
-4. For real SMS in India: register your sender ID and OTP template on a DLT portal through your SMS provider (Twilio, MSG91…), then put real credentials in the Phone panel.
+1. **Authentication → Sign In / Providers → Phone:** enable (pick Twilio with placeholders until DLT is done).
+2. Add **test phone numbers with fixed OTPs**, e.g. `919876543210=123456`. No SMS is sent for these.
+3. **Authentication → Rate Limits:** keep SMS low (e.g. 30/hour).
+4. For real SMS in India: register a sender ID and OTP template on DLT through your SMS provider, then add real credentials.
 
-### 8.4 Email alerts (optional)
-Create a [Resend](https://resend.com) account, verify a sending domain, create an API key, then set `RESEND_API_KEY` and `EMAIL_FROM`. Without them, alerts are skipped and everything else works.
-
-### 8.5 Run locally
+### 8.4 Phone notifications (web push)
 ```bash
-cp .env.example .env.local   # fill in values from Supabase → Project Settings → API
+npx web-push generate-vapid-keys
+```
+Put the public key in `NEXT_PUBLIC_VAPID_PUBLIC_KEY`, the private key in `VAPID_PRIVATE_KEY`, and a contact in `VAPID_SUBJECT` (`mailto:you@…`). Generate once and keep them: changing them invalidates every device that turned notifications on.
+
+### 8.5 Email (optional)
+[Resend](https://resend.com): verify a domain, create an API key, set `RESEND_API_KEY` and `EMAIL_FROM`.
+
+### 8.6 Run locally
+```bash
+cp .env.example .env.local   # fill in values
 npm install
 npm run dev                  # http://localhost:3000
 ```
-GPS needs HTTPS or `localhost`. To test the badge on a phone, deploy first or use a tunnel.
 
-| Variable | Where it comes from | Used by |
+| Variable | Where from | Used by |
 | --- | --- | --- |
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase → API | browser + server |
-| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase → API ("publishable", or "anon" on older projects) | browser + server |
-| `SUPABASE_SECRET_KEY` | Supabase → API ("secret", or "service_role") | server only, email lookups |
+| `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase → API | browser + server |
+| `SUPABASE_SECRET_KEY` | Supabase → API ("secret"/"service_role") | server: alerts only |
 | `NEXT_PUBLIC_SITE_URL` | your app URL | links in emails |
-| `RESEND_API_KEY`, `EMAIL_FROM` | Resend | email alerts |
+| `NEXT_PUBLIC_VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | `npx web-push generate-vapid-keys` | push |
+| `RESEND_API_KEY`, `EMAIL_FROM` | Resend | email |
 
-### 8.6 Deploy on Vercel
-Import the GitHub repo in Vercel, add the variables above (set `NEXT_PUBLIC_SITE_URL` to the Vercel URL), deploy, then add that URL to Supabase Redirect URLs (8.2 step 4).
+GPS and push need HTTPS or `localhost`. To test on a phone, deploy first.
+
+### 8.7 Deploy on Vercel
+Import the repo, add the variables, deploy, then add the Vercel URL to Supabase Redirect URLs.
+
+### 8.8 Make yourself admin
+SQL editor: `insert into user_roles (user_id, role) values ('<your auth user id>', 'admin');` An **Admin** link then appears in the header.
 
 ---
 
-## 9. Day-to-day operations
+## 9. Running the pilot (admin)
 
-All in the Supabase **SQL editor**.
+The **Admin** page (`/admin`) covers day-to-day work:
+- **At a glance:** people (and new this week), verified phones, live listings, requests this week, acceptance rate, reviews, open reports, suspensions.
+- **Reports:** each with the reason and what was reported (listing title, message text, person). Hide/unhide a listing, suspend the person (with a private reason), mark actioned, dismiss, reopen.
+- **Localities:** residents, live listings, waitlist and whether a boundary is drawn; open or close each one.
+- **Suspended people:** unsuspend.
 
+Still done in SQL:
 ```sql
--- Make yourself admin (find your id in Authentication → Users)
-insert into user_roles (user_id, role) values ('<your-user-id>', 'admin');
-
--- Open reports
-select * from reports where status = 'open' order by created_at desc;
-update reports set status = 'actioned' where id = 12;
-
--- Hide a listing
-update listings set is_hidden = true where id = '<listing-id>';
-
--- Remove a person entirely (cascades to everything they own)
-delete from auth.users where id = '<user-id>';
-
--- Open another locality
-update localities set is_active = true where slug = 'vyttila';
-
 -- Draw a real boundary (geometry JSON from geojson.io)
-update localities
-set boundary = st_multi(st_geomfromgeojson('<geometry JSON>'))::geography
-where slug = 'kaloor';
-
--- Pilot health
-select status, count(*) from requests group by status;
-select count(*) from listings where not is_paused and not is_hidden;
+update localities set boundary = st_multi(st_geomfromgeojson('<geometry JSON>'))::geography where slug = 'kaloor';
+-- Remove a person entirely
+delete from auth.users where id = '<user-id>';
 ```
 
 ---
 
-## 10. Testing the database rules
+## 10. Tests and CI
 
-The rules were tested against a local Postgres 16 + PostGIS that mimics Supabase (roles `anon`/`authenticated`, `auth.users`, `auth.uid()`, default grants). Checks that pass:
+`supabase/tests/10_rules_test.sql` runs the real migrations on a throwaway Postgres + PostGIS that imitates Supabase (roles, `auth.uid()`, Supabase's permissive default grants) and makes about 100 checks, mostly by trying to break things: under-18 sign-up, listing without a phone, faking a request status, spoofing a chat sender, requesting outside your locality, reviewing someone else's job, vouching from another locality, reading other people's chats, devices or view counts, calling internal or admin functions, and more. It also checks the behaviours: stale requests expiring on their own, history kept after deletes, suspension hiding people, service areas and search.
 
-- under-18 and closed-locality onboarding are refused
-- listing without a verified phone, for someone else, or setting `is_hidden`/`locality_id` is refused
-- inserting or updating `requests` directly is refused; only the provider can accept
-- duplicate open requests are refused; requests outside your home locality are refused
-- messages before acceptance, or with a spoofed `sender_id`, are refused
-- outsiders see no requests, messages, other people's private profiles, or roles
-- blocking hides listings both ways
-- 30-day locality cooldown works; changing locality pauses listings
-- `expire_requests()` expires stale requests; account deletion cascades
-- internal functions (`notify`, `expire_requests`, the trigger) can't be called from the API
+```bash
+# needs any Postgres 16 + PostGIS you can throw away (NOT your Supabase project)
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/postgres npm run test:db
+```
 
-To re-run something similar, use the Supabase CLI's local stack (`supabase start`) and run SQL as a user with `set role authenticated; select set_config('request.jwt.claim.sub', '<uuid>', false);`.
+GitHub Actions (`.github/workflows/ci.yml`) runs type-check, lint, build, and the database tests on every push.
 
 ---
 
-## 11. Extending it
+## 11. What's still left
 
-- **Service areas** (serve up to 2 localities within ~5 km): add `listing_service_areas(listing_id, locality_id)`, a distance check on insert, and change the locality check in `create_request` and the browse query.
-- **Reviews:** a `reviews` table keyed by `request_id` (unique), insert allowed only for the seeker of a `done` request.
-- **Push notifications:** store a web-push subscription in `profiles_private`; send from the same places as email.
-- **Admin screen:** pages under `/admin` gated by `is_admin()`, reading `reports`.
-- **Languages:** move UI strings into a dictionary (e.g. `next-intl`) and add Malayalam and Tamil.
+- **SMS / WhatsApp alerts** — need DLT registration and a paid provider; plug into `src/lib/notify.ts` next to push and email.
+- **Malayalam and Tamil** — move UI strings into a dictionary (e.g. `next-intl`).
+- **Captcha** on sign-in, **masked calling**, **payments**, **native apps**.
+- **Photo uploads** (strip location data from images first).
+- **Accurate boundaries** for each locality (drawn by hand; see section 9).
 
 ---
 
@@ -324,9 +314,11 @@ To re-run something similar, use the Supabase CLI's local stack (`supabase start
 | Symptom | Likely cause |
 | --- | --- |
 | Google sign-in returns to `/login?error=1` | Redirect URL missing in Supabase URL Configuration, or wrong Google redirect URI |
-| "Send code" fails | Phone provider not enabled, number not in test list, or SMS rate limit hit |
+| "Send code" fails | Phone provider not enabled, number not in the test list, or SMS rate limit hit |
 | Everyone shows "Self-selected" | Testing on a laptop (imprecise location) or over plain HTTP |
-| Chat doesn't update live | Realtime publication missing: re-run the last block of the schema migration |
-| Requests never expire | `pg_cron` not enabled before running the migration: enable it, then run `select cron.schedule('ayal-expire-requests', '*/15 * * * *', 'select public.expire_requests()');` |
+| "Phone notifications aren't set up" | `NEXT_PUBLIC_VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` missing |
+| No push on iPhone | Ayal must be added to the Home Screen and opened from there first |
+| Chat doesn't update live | Realtime publication missing: re-run the last block of migration 1 |
+| Requests show "expired" late | `pg_cron` not enabled; they still expire as soon as anyone involved opens Requests |
 | Project went offline | Supabase free projects pause after a week of no activity; upgrade before the pilot |
-| No alert emails | `RESEND_API_KEY`/`EMAIL_FROM` not set, domain not verified, or the user turned alerts off |
+| No alert emails | `RESEND_API_KEY`/`EMAIL_FROM` not set, domain not verified, or the person turned emails off |

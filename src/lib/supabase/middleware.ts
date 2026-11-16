@@ -2,7 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL } from "@/lib/env";
 
-const PROTECTED = ["/me", "/requests", "/account", "/onboarding", "/verify-phone"];
+const PROTECTED = ["/me", "/requests", "/account", "/onboarding", "/verify-phone", "/admin"];
 
 /** Refreshes the auth session on every request and guards signed-in pages. */
 export async function updateSession(request: NextRequest) {

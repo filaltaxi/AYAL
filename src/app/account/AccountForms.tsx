@@ -31,7 +31,7 @@ export function LocalityForm({ localities, currentId }: { localities: Locality[]
   const [state, action] = useActionState(changeHomeLocality, null);
   return (
     <form action={action} className="mt-4 space-y-4">
-      <HomeLocalityField localities={localities} initialId={currentId} />
+      <HomeLocalityField localities={localities} initialId={currentId} autoLocate={false} />
       <FormMessage state={state} />
       <SubmitButton className="btn-outline" pendingText="Updating…">Update home locality</SubmitButton>
     </form>
@@ -45,7 +45,7 @@ export function DeleteAccountForm() {
       <summary className="cursor-pointer list-none text-sm font-semibold text-muted hover:text-danger">Delete account</summary>
       <form action={action} className="card mt-2 space-y-3 p-4 text-left">
         <p className="text-sm">
-          This permanently removes your profile, listings, requests and messages. Type <strong>DELETE</strong> to confirm.
+          This permanently removes your profile, listings and messages. Requests stay with the other person, showing you as “Former member”. Type <strong>DELETE</strong> to confirm.
         </p>
         <input name="confirm" className="input" autoComplete="off" />
         <FormMessage state={state} />
