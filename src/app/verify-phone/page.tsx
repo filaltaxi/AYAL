@@ -1,3 +1,4 @@
+import { safeNext } from "@/lib/safe-next";
 import { redirect } from "next/navigation";
 import { getViewer } from "@/lib/viewer";
 import { PhoneOtpForm } from "./PhoneOtpForm";
@@ -6,7 +7,7 @@ export const metadata = { title: "Verify your phone" };
 
 export default async function VerifyPhonePage({ searchParams }: { searchParams: Promise<{ next?: string }> }) {
   const { next } = await searchParams;
-  const safe = next && next.startsWith("/") && !next.startsWith("//") ? next : "/";
+  const safe = safeNext(next);
   const viewer = await getViewer();
   if (!viewer) redirect("/login");
   if (!viewer.profile) redirect(`/onboarding?next=${encodeURIComponent(safe)}`);

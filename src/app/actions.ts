@@ -7,6 +7,7 @@ import { createClient } from "@/lib/supabase/server";
 import { friendlyError, getViewer } from "@/lib/viewer";
 import { alertUser } from "@/lib/notify";
 import { LOCALITY_COOKIE } from "@/lib/env";
+import { safeNext } from "@/lib/safe-next";
 import type { ActionResult, Message } from "@/lib/types";
 
 const str = (fd: FormData, key: string) => String(fd.get(key) ?? "").trim();
@@ -17,11 +18,6 @@ const num = (fd: FormData, key: string) => {
   return Number.isFinite(n) ? n : null;
 };
 const isUuid = (s: string) => /^[0-9a-f-]{36}$/i.test(s);
-
-/** Safe internal redirect target (no open redirects). */
-function safeNext(next: string | null | undefined, fallback = "/") {
-  return next && next.startsWith("/") && !next.startsWith("//") ? next : fallback;
-}
 
 // ── Locality preference (browsing only, no account needed) ───────────────
 export async function rememberLocality(slug: string) {
